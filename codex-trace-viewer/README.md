@@ -28,7 +28,7 @@ dsh plugin --profile web add dsh-client-codex-trace-viewer
 或直接从包含多个插件的 GitHub 仓库安装：
 
 ```sh
-dsh plugin --profile web add github:<github-user>/dsh-plugins --filter dsh-client-codex-trace-viewer
+dsh plugin --profile web add github:JayVae/dsh-plugins --filter dsh-client-codex-trace-viewer
 ```
 
 也可以手动方式（等价于上面第一条）：
