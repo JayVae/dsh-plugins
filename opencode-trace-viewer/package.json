@@ -16,8 +16,10 @@
   "main": "lib/index.js",
   "files": [
     "lib",
+    "!lib/assets",
     "!lib/*.bak.js",
     "scripts",
+    "!scripts/*.bak.mjs",
     "README.md"
   ],
   "exports": {
@@ -39,6 +41,7 @@
   "scripts": {
     "convert": "node scripts/convert.mjs",
     "build": "node scripts/build.mjs",
-    "build:public": "node scripts/build-public.mjs && node scripts/build.mjs"
+    "build:public": "node scripts/build-public.mjs && node scripts/build.mjs",
+    "prepack": "node scripts/prepack-guard.mjs"
   }
 }
