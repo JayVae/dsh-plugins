@@ -1,0 +1,44 @@
+{
+  "name": "dsh-client-codex-trace-viewer",
+  "version": "0.1.0",
+  "description": "Trajectory viewer for Codex session rollouts inside the DeepSeek Harness web UI.",
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "codex",
+    "trace",
+    "trajectory",
+    "session-viewer"
+  ],
+  "type": "module",
+  "main": "lib/index.js",
+  "files": [
+    "lib",
+    "!lib/*.bak.js",
+    "scripts",
+    "README.md"
+  ],
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*"
+  },
+  "engines": {
+    "dsh": "^0.2.1-rc.2",
+    "node": ">=22"
+  },
+  "scripts": {
+    "convert": "node scripts/convert.mjs",
+    "build": "node scripts/build.mjs",
+    "build:public": "node scripts/build-public.mjs && node scripts/build.mjs"
+  }
+}
