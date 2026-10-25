@@ -53,7 +53,7 @@ pnpm add dsh-client-codex-trace-viewer
 1. 生成轨迹数据（读取本机 Codex 会话，输出内联进插件 bundle）。在插件包目录内执行：
 
    ```sh
-   npx --yes github:<github-user>/dsh-plugins --prefix dsh-client-codex-trace-viewer
+   npx --yes github:JayVae/dsh-plugins --prefix dsh-client-codex-trace-viewer
    ```
 
    或克隆仓库后：`node scripts/convert.mjs && node scripts/build.mjs`
