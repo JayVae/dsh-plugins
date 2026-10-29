@@ -1,6 +1,10 @@
 {
   "name": "dsh-session-delete-plugin",
   "version": "0.1.0",
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
   "description": "Permanently delete a conversation's local records from the DeepSeek Harness web sidebar.",
   "license": "MIT",
   "repository": {
