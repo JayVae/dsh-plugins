@@ -6,6 +6,7 @@
 | --- | --- | --- |
 | [codex-trace-viewer](./codex-trace-viewer/) | [`dsh-client-codex-trace-viewer`](https://www.npmjs.com/package/dsh-client-codex-trace-viewer) | 在 dsh Web UI 中查看 Codex CLI 会话轨迹 |
 | [opencode-trace-viewer](./opencode-trace-viewer/) | [`dsh-client-opencode-trace-viewer`](https://www.npmjs.com/package/dsh-client-opencode-trace-viewer) | 在 dsh Web UI 中查看 OpenCode 会话轨迹 |
+| [session-delete](./session-delete/) | [`dsh-session-delete-plugin`](https://www.npmjs.com/package/dsh-session-delete-plugin) | 在侧边栏对话「…」菜单中彻底删除对话的本地记录 |
 
 两个插件界面与功能一致（目录优先的会话列表、轮次瀑布流时间轴、调用链阅读视图、minimap 平移缩放、搜索过滤），数据源不同：前者读取 `~/.codex/sessions/`，后者读取 OpenCode 的 SQLite 数据库。
 

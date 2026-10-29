@@ -1,5 +1,8 @@
 node_modules/
 **/lib/client.js
+# session-delete 无构建步骤，lib/*.js 是手写源码，需要入库
+!session-delete/lib/client.js
+!session-delete/lib/index.js
 **/lib/client.traces.js
 **/lib/assets/
 **/lib/*.bak.js
