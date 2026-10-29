@@ -56,12 +56,14 @@ pnpm add dsh-client-codex-trace-viewer
    `lib/assets` 下（`--out` 指向），无需重建 bundle、无需重启 dsh：
 
    ```sh
+   # 在克隆的本仓库 codex-trace-viewer 目录内执行。
+
    # Windows（PowerShell）
-   node E:\code\dsh\dsh-plugins\codex-trace-viewer\scripts\convert.mjs `
+   node scripts\convert.mjs `
      --out "$env:USERPROFILE\.dsh\profiles\web\node_modules\dsh-client-codex-trace-viewer\lib\assets"
 
    # macOS / Linux
-   node /path/to/dsh-plugins/codex-trace-viewer/scripts/convert.mjs \
+   node scripts/convert.mjs \
      --out ~/.dsh/profiles/web/node_modules/dsh-client-codex-trace-viewer/lib/assets
    ```
 
