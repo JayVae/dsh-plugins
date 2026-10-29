@@ -2,6 +2,10 @@
 
 在 DeepSeek Harness（dsh）Web 侧边栏每个对话的「…」菜单里增加**删除对话（本地记录）**选项：确认后彻底删除该对话在本机的全部记录。
 
+- npm 包：[`dsh-session-delete-plugin`](https://www.npmjs.com/package/dsh-session-delete-plugin)
+- 要求：dsh `0.2.1-rc.2`+，Node.js 22+
+- 结构：`lib/client.js` 浏览器端（菜单项 + 确认对话框），`lib/index.js` 宿主端（删除路由 + 删除逻辑）
+
 ## 行为
 
 - 菜单项位于会话「…」菜单末尾（置顶 / 重命名 / 复刻 / 归档 / 复制 ID 之后）。
@@ -53,12 +57,38 @@ dsh plugin --profile web add dsh-session-delete-plugin
 2. 每次修改源码后，在 `~/.dsh/profiles/web` 下重新执行 `pnpm install` 刷新副本。
 3. 改动 `cordis.patch.yml`（如加个注释）触发 HMR 重载，刷新页面。
 
+## 更新
+
+```sh
+# 更新到最新发布版
+dsh plugin --profile web add dsh-session-delete-plugin   # 或在 profile 目录 pnpm update dsh-session-delete-plugin
+```
+
+刷新浏览器页面生效。
+
+## 发布（维护者）
+
+1. 修改代码，必要时 bump `package.json` 的 `version`。
+2. 在本目录执行 `npm publish`（`publishConfig` 已固定发布到官方 registry `https://registry.npmjs.org/`，本地 npm 镜像不影响）。
+3. 提交推送本仓库；本地 profile 按上文「从源码安装 / 修改」刷新副本。
+
+## 故障排查
+
+- **菜单项没出现**：先硬刷新（`Ctrl+Shift+R`，页面 index 可能被浏览器缓存）；仍没有则按 F12 看 Console 有无 `[dsh-session-delete-plugin]` 或 `client-modules` 报错。
+- **删除失败**：看 `~/.dsh/session-delete.log` 中 `delete failed:` 行；`live` 表示对话正在使用中，先切换到其他对话再删。
+- **路由不存在（404/405）**：说明 insert 条目未生效，检查 `cordis.patch.yml` 与 `pnpm install` 是否完成。
+- **搜索还能搜到已删除的会话**：全文索引在下次对账时自动清理，重新搜索即可。
+
 ## 卸载
 
-从 `cordis.patch.yml` 删除 insert 条目、从 `package.json` 删除依赖并 `pnpm install`；之后才可删除本目录源码。
+从 `cordis.patch.yml` 删除 insert 条目、从 `package.json` 删除依赖并 `pnpm install`；之后才可删除源码目录。
 
 ## 实现
 
 - `lib/client.js`：向 `sidebar.workspaces.session.menu.item`（order 475）注册菜单项，确认对话框挂在 `shell.overlay`（内置重命名/归档对话框同一模式）。
 - `lib/index.js`：`ctx.inject(["webServer"], ...)` 等服务就绪后注册 `POST /.dsh-session-delete/delete` 路由；删除流程见上文「行为」。
-- 无构建步骤，`lib/*.js` 为手写产物（区别于本仓库其他插件的 src → build 流程，`.gitignore` 已为它开例外）。
+- 无构建步骤，`lib/*.js` 为手写产物（区别于本仓库其他插件的 src → build 流程，仓库 `.gitignore` 已为它开例外）。
+
+## License
+
+MIT
