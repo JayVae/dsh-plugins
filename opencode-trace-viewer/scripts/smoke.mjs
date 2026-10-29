@@ -134,4 +134,15 @@ if (!after.includes('已更新')) throw new Error(`success message missing: ${af
 const gets = calls.filter((c) => c.method === 'GET' && c.url.endsWith('/traces')).length
 if (gets < 2) throw new Error(`did not re-fetch /traces after refresh (GETs=${gets})`)
 
-console.log(`smoke ok: ${route} — click POSTs ${route}/refresh, then re-fetches ${route}/traces`)
+// ---- 3. session names render for both producer shapes ---------------------
+// The Codex converter emits name/cwd, the OpenCode one title/directory. One
+// shared client serves both, so each session must show its label either way.
+store[0] = [
+  { id: 's1', title: 'opencode-style title', directory: '/proj/one', folder: 'one', date: '2026-01-01', events: [] },
+  { id: 's2', name: 'codex-style name', cwd: '/proj/two', folder: 'two', date: '2026-01-02', events: [] },
+]
+const named = text(render())
+if (!named.includes('opencode-style title')) throw new Error('session with only `title` renders no name')
+if (!named.includes('codex-style name')) throw new Error('session with `name` renders no name')
+
+console.log(`smoke ok: ${route} — click POSTs ${route}/refresh, re-fetches ${route}/traces, session names render`)

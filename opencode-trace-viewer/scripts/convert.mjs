@@ -71,6 +71,9 @@ const traces = []
 for (const s of sessions) {
   const trace = {
     id: s.id,
+    // `name` is the field the viewer prefers (Codex rollouts emit it); `title`
+    // stays for OpenCode-native tooling that reads the raw session row.
+    name: s.title || '',
     title: s.title || '',
     date: fmtTime(s.time_created).slice(0, 10),
     updated: fmtTime(s.time_updated),

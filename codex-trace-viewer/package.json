@@ -1,7 +1,7 @@
 {
   "name": "dsh-client-codex-trace-viewer",
   "publishConfig": { "registry": "https://registry.npmjs.org/" },
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Trajectory viewer for Codex session rollouts inside the DeepSeek Harness web UI.",
   "license": "MIT",
   "keywords": [

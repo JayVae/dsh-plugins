@@ -20,6 +20,17 @@ window.__ModuleLoader__.load({ id: 'dsh-client-codex-trace-viewer', factory: (re
       r.json().then(body => r.ok ? body : Promise.reject(new Error((body && body.error) || `HTTP ${r.status}`))))
   }
 
+  // Session name and project path differ per producer: the Codex converter emits
+  // name/cwd, the OpenCode one title/directory. One shared client reads both, so
+  // resolve the aliases here rather than pinning one producer's field names.
+  function sessionName(trace) {
+    return trace.name || trace.title || trace.id || '(untitled session)'
+  }
+
+  function sessionPath(trace) {
+    return trace.cwd || trace.directory || ''
+  }
+
   function h(tag, props, ...children) {
     return React.createElement(tag, props, ...children.flat(Infinity).filter(c => c !== undefined && c !== null && c !== false))
   }
@@ -476,9 +487,9 @@ window.__ModuleLoader__.load({ id: 'dsh-client-codex-trace-viewer', factory: (re
       h('div', { className: 'ctv-toolbar' },
         h('button', { className: 'ctv-back', onClick: onBack }, '← Back'),
         h('div', { className: 'ctv-title' },
-          h('div', { className: 'ctv-title-name' }, trace.name),
+          h('div', { className: 'ctv-title-name' }, sessionName(trace)),
           h('div', { className: 'ctv-title-meta' },
-            h('span', { title: trace.cwd }, trace.cwd || ''),
+            h('span', { title: sessionPath(trace) }, sessionPath(trace)),
             trace.model && h('span', { className: 'ctv-chip' }, trace.model),
             h('span', null, `${trace.date} · ${trace.events.length} events`))),
         h('input', {
@@ -571,9 +582,9 @@ window.__ModuleLoader__.load({ id: 'dsh-client-codex-trace-viewer', factory: (re
           h('span', { className: 'ctv-folder-count' }, items.length)),
         !collapsed.has(folder) && items.map(t => h('div', {
           key: t.id, className: 'ctv-item', onClick: () => onOpen(t),
-          title: `${t.cwd}\n${t.name}`,
+          title: `${sessionPath(t)}\n${sessionName(t)}`,
         },
-          h('div', { className: 'ctv-item-name' }, t.name),
+          h('div', { className: 'ctv-item-name' }, sessionName(t)),
           h('div', { className: 'ctv-item-meta' }, `${t.date} · ${t.events.length} events`),
         )))))
   }
