@@ -18,6 +18,7 @@
   "files": [
     "lib",
     "!lib/assets",
+    "!lib/client.traces.js",
     "!lib/*.bak.js",
     "scripts",
     "!scripts/*.bak.mjs",
