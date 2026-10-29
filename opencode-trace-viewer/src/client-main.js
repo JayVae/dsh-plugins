@@ -1,11 +1,11 @@
-window.__ModuleLoader__.load({ id: 'dsh-client-codex-trace-viewer', factory: (require) => {
+window.__ModuleLoader__.load({ id: 'dsh-client-opencode-trace-viewer', factory: (require) => {
   const React = require('react')
   const ReactDOM = require('react-dom/client')
 
   // The host companion (lib/index.js) serves this route. Deriving it from the
   // package id keeps the sibling opencode build's id rewrite correct too:
-  // dsh-client-codex-trace-viewer -> /.dsh-codex-trace-viewer.
-  const PKG_ID = 'dsh-client-codex-trace-viewer'
+  // dsh-client-opencode-trace-viewer -> /.dsh-codex-trace-viewer.
+  const PKG_ID = 'dsh-client-opencode-trace-viewer'
   const ROUTE_PREFIX = '/.dsh-' + PKG_ID.replace('dsh-client-', '')
 
   // The viewer may run in a popup written via document.write (about:blank),
@@ -29,6 +29,38 @@ window.__ModuleLoader__.load({ id: 'dsh-client-codex-trace-viewer', factory: (re
 
   function sessionPath(trace) {
     return trace.cwd || trace.directory || ''
+  }
+
+  function errText(e) {
+    return String(e && e.message ? e.message : e)
+  }
+
+  // ---- sharded data: directories -> sessions -> events ----------------------
+  // The host companion serves three routes, each fetched only when needed:
+  //   GET /index                    every directory + counts     (a few KB)
+  //   GET /sessions?dir=<key>       the sessions inside one dir   (a few KB)
+  //   GET /session?dir=<key>&file=  one session's events          (100s of KB)
+  // The old single traces.json grew with every conversation; nothing here is
+  // transferred until the directory — then the session — it belongs to is
+  // picked, so opening the viewer costs the same however long history gets.
+  function fmtBytes(n) {
+    if (!n) return '0 B'
+    if (n < 1024) return n + ' B'
+    if (n < 1048576) return (n / 1024).toFixed(0) + ' KB'
+    return (n / 1048576).toFixed(1) + ' MB'
+  }
+
+  // The directory opened last is remembered, so reopening the viewer returns to
+  // it — that re-fetches one directory listing, never the whole history.
+  const PREFS_KEY = 'dsh-trace-viewer:' + PKG_ID
+  function readPref(name) {
+    try { return window.localStorage.getItem(PREFS_KEY + ':' + name) } catch (e) { return null }
+  }
+  function writePref(name, value) {
+    try {
+      if (value == null) window.localStorage.removeItem(PREFS_KEY + ':' + name)
+      else window.localStorage.setItem(PREFS_KEY + ':' + name, value)
+    } catch (e) { /* storage disabled: remembering is a convenience, not a requirement */ }
   }
 
   function h(tag, props, ...children) {
@@ -560,71 +592,131 @@ window.__ModuleLoader__.load({ id: 'dsh-client-codex-trace-viewer', factory: (re
     )
   }
 
-  function TraceList({ traces, onOpen, width, busy, message, onRefresh }) {
-    const folders = new Map()
-    for (const t of traces) {
-      const f = t.folder || '(no cwd)'
-      if (!folders.has(f)) folders.set(f, [])
-      folders.get(f).push(t)
-    }
-    const [collapsed, setCollapsed] = React.useState(() => new Set())
-    const toggleFolder = f => setCollapsed(prev => {
-      const next = new Set(prev)
-      if (next.has(f)) next.delete(f); else next.add(f)
-      return next
-    })
+  function Sidebar({ index, dir, trace, filter, onFilter, onOpenDir, onOpenSession, onBackToDirs, busy, message, onRefresh, width }) {
+    const q = filter.trim().toLowerCase()
+    const dirs = (index.dirs || []).filter(d => !q || (d.folder + ' ' + (d.path || '')).toLowerCase().includes(q))
+    const sessions = dir
+      ? dir.sessions.filter(s => !q || (sessionName(s) + ' ' + s.id).toLowerCase().includes(q))
+      : []
+    const empty = dir
+      ? (sessions.length ? '' : (q ? '没有匹配的会话' : '该目录下没有会话'))
+      : (dirs.length ? '' : (q ? '没有匹配的目录' : '还没有数据 —— 点「⟳ 更新数据」'))
     return h('div', { className: 'ctv-sidebar', style: { width } },
       h(RefreshBar, { busy, message, onRefresh }),
-      [...folders.entries()].map(([folder, items]) => h('div', { key: folder, className: 'ctv-folder' },
-        h('div', { className: 'ctv-folder-head', onClick: () => toggleFolder(folder) },
-          h('span', { className: 'ctv-folder-arrow' }, collapsed.has(folder) ? '▸' : '▾'),
-          h('span', { className: 'ctv-folder-name', title: folder }, folder),
-          h('span', { className: 'ctv-folder-count' }, items.length)),
-        !collapsed.has(folder) && items.map(t => h('div', {
-          key: t.id, className: 'ctv-item', onClick: () => onOpen(t),
-          title: `${sessionPath(t)}\n${sessionName(t)}`,
-        },
-          h('div', { className: 'ctv-item-name' }, sessionName(t)),
-          h('div', { className: 'ctv-item-meta' }, `${t.date} · ${t.events.length} events`),
-        )))))
+      h('input', {
+        className: 'ctv-side-filter',
+        placeholder: dir ? '过滤会话…' : '过滤目录…',
+        value: filter,
+        onChange: e => onFilter(e.target.value),
+      }),
+      dir && h('div', { className: 'ctv-crumb' },
+        h('button', { className: 'ctv-back ctv-crumb-back', type: 'button', onClick: onBackToDirs }, '← 目录'),
+        h('span', { className: 'ctv-crumb-name', title: dir.path || '' }, dir.folder || dir.path || '(unknown)'),
+        h('span', { className: 'ctv-folder-count' }, dir.sessions.length)),
+      dir
+        ? sessions.map(s => h('div', {
+            key: s.id,
+            className: 'ctv-item' + (trace && trace.id === s.id ? ' ctv-item-on' : ''),
+            onClick: () => onOpenSession(dir.key, s),
+            title: `${sessionName(s)}\n${s.id}`,
+          },
+            h('div', { className: 'ctv-item-name' }, sessionName(s)),
+            h('div', { className: 'ctv-item-meta' }, `${s.date || ''} · ${s.events} events · ${fmtBytes(s.bytes)}`)))
+        : dirs.map(d => h('div', {
+            key: d.key,
+            className: 'ctv-dir',
+            onClick: () => onOpenDir(d.key),
+            title: d.path || d.folder,
+          },
+            h('div', { className: 'ctv-dir-name' }, d.folder || d.path || '(no path)'),
+            h('div', { className: 'ctv-dir-meta' }, `${d.sessions} 个会话 · ${fmtBytes(d.bytes)}`),
+            d.path && d.path !== d.folder && h('div', { className: 'ctv-dir-path' }, d.path))),
+      empty && h('div', { className: 'ctv-side-empty' }, empty),
+    )
   }
 
   function OpenCodeTraceApp() {
-    const [traces, setTraces] = React.useState(null)
-    const [selected, setSelected] = React.useState(null)
+    const [index, setIndex] = React.useState(null)
+    const [dir, setDir] = React.useState(null)
+    const [trace, setTrace] = React.useState(null)
     const [error, setError] = React.useState(null)
-    const [sidebarWidth, setSidebarWidth] = React.useState(300)
+    const [loading, setLoading] = React.useState('index')
     const [busy, setBusy] = React.useState(false)
     const [message, setMessage] = React.useState(null)
+    const [filter, setFilter] = React.useState('')
+    const [sidebarWidth, setSidebarWidth] = React.useState(320)
 
-    const loadTraces = React.useCallback(
-      () => fetchJson(ROUTE_PREFIX + '/traces').then(data => { setTraces(data); return data }),
+    // The index lists directories, not events: it stays a few KB no matter how
+    // long the conversations inside those directories get.
+    const loadIndex = React.useCallback(
+      () => fetchJson(ROUTE_PREFIX + '/index').then(data => { setIndex(data); return data }),
       [])
 
+    const openDir = React.useCallback(key => {
+      setLoading('dir')
+      setTrace(null)
+      return fetchJson(ROUTE_PREFIX + '/sessions?dir=' + encodeURIComponent(key))
+        .then(listing => {
+          setDir(listing)
+          setError(null)
+          writePref('dir', key)
+          return listing
+        })
+        .catch(e => setMessage('目录加载失败：' + errText(e)))
+        .then(() => setLoading(null))
+    }, [])
+
+    const openSession = React.useCallback((dirKey, session) => {
+      setLoading('session')
+      return fetchJson(ROUTE_PREFIX + '/session?dir=' + encodeURIComponent(dirKey) + '&file=' + encodeURIComponent(session.file))
+        .then(full => {
+          setTrace(full)
+          setError(null)
+          return full
+        })
+        .catch(e => setMessage('会话加载失败：' + errText(e)))
+        .then(() => setLoading(null))
+    }, [])
+
     React.useEffect(() => {
-      // Traces JSON is served by the host companion at a fixed route and
-      // re-read from disk per request, so new sessions appear on refresh.
+      // Traces are served by the host companion and re-read from disk per
+      // request, so new sessions appear after 「⟳ 更新数据」 without a rebuild.
       let cancelled = false
-      loadTraces().catch(e => { if (!cancelled) setError(String(e && e.message ? e.message : e)) })
+      loadIndex()
+        .then(data => {
+          if (cancelled) return null
+          const remembered = readPref('dir')
+          if (remembered && (data.dirs || []).some(d => d.key === remembered)) return openDir(remembered)
+          setLoading(null)
+          return null
+        })
+        .catch(e => {
+          if (cancelled) return
+          setLoading(null)
+          setError(errText(e))
+        })
       return () => { cancelled = true }
-    }, [loadTraces])
+    }, [loadIndex, openDir])
 
     const refresh = React.useCallback(() => {
       if (busy) return
       setBusy(true)
       setMessage(null)
+      const keepDir = dir && dir.key
       // The custom header cannot be set by a cross-site form/fetch without a
       // CORS preflight the host never grants, so it doubles as the CSRF guard.
       fetchJson(ROUTE_PREFIX + '/refresh', { method: 'POST', headers: { 'x-dsh-trace-refresh': '1' } })
-        .then(res => loadTraces().then(data => ({ res, data })))
-        .then(({ data }) => {
+        .then(res => loadIndex().then(data => ({ res, data })))
+        .then(({ res, data }) => {
           setError(null)
-          setSelected(null)
-          setMessage(`已更新：${data.length} 个会话`)
+          setTrace(null)
+          const counts = (res && res.data) || data.totals || {}
+          setMessage(`已更新：${counts.sessions || 0} 个会话 / ${counts.dirs || 0} 个目录`)
+          return keepDir && (data.dirs || []).some(d => d.key === keepDir) ? openDir(keepDir) : setDir(null)
         })
-        .catch(e => setMessage('更新失败：' + String(e && e.message ? e.message : e)))
+        .catch(e => setMessage('更新失败：' + errText(e)))
         .then(() => setBusy(false))
-    }, [busy, loadTraces])
+    }, [busy, dir, loadIndex, openDir])
 
     if (error) {
       return h('div', { className: 'ctv-root ctv-error' },
@@ -633,38 +725,49 @@ window.__ModuleLoader__.load({ id: 'dsh-client-codex-trace-viewer', factory: (re
           h('div', { style: { marginTop: '8px' } }, 'Failed to load traces: ' + error),
           h('div', { style: { marginTop: '12px' } }, h(RefreshBar, { busy, message, onRefresh: refresh }))))
     }
-    if (!traces) return h('div', { className: 'ctv-root ctv-loading' }, 'Loading OpenCode traces…')
+    if (!index) return h('div', { className: 'ctv-root ctv-loading' }, 'Loading OpenCode traces…')
 
-    const list = h(TraceList, { traces, onOpen: t => setSelected(t), width: sidebarWidth, busy, message, onRefresh: refresh })
+    const totals = index.totals || {}
+    const sidebar = h(Sidebar, {
+      index, dir, trace, filter,
+      onFilter: setFilter,
+      onOpenDir: openDir,
+      onOpenSession: openSession,
+      onBackToDirs: () => { setDir(null); setTrace(null); writePref('dir', null) },
+      busy, message, onRefresh: refresh, width: sidebarWidth,
+    })
 
-    if (traces.length === 0) {
-      return h('div', { className: 'ctv-root' },
-        list,
-        h(Resizer, { onResize: setSidebarWidth }),
-        h('div', { className: 'ctv-main ctv-empty' },
+    const main = trace
+      ? h(TraceView, { trace, onBack: () => setTrace(null) })
+      : h('div', { className: 'ctv-main ctv-empty' },
           h('div', null,
             h('div', { style: { fontSize: '40px' } }, '🌀'),
-            h('div', { style: { fontSize: '16px', fontWeight: 600, marginTop: '8px' } }, 'No OpenCode traces yet'),
-            h('div', { style: { opacity: 0.6, marginTop: '4px' } }, '点击左侧「⟳ 更新数据」扫描本机会话。'))))
-    }
+            dir
+              ? [
+                  h('div', { key: 'name', style: { fontSize: '16px', fontWeight: 600, marginTop: '8px' } }, dir.folder || '(no path)'),
+                  h('div', { key: 'path', style: { opacity: 0.55, marginTop: '4px', fontSize: '12px' } }, dir.path || ''),
+                  h('div', { key: 'hint', style: { opacity: 0.6, marginTop: '6px' } },
+                    `${dir.sessions.length} 个会话，点击左侧会话查看轨迹`),
+                ]
+              : [
+                  h('div', { key: 'title', style: { fontSize: '16px', fontWeight: 600, marginTop: '8px' } }, 'Select an OpenCode session'),
+                  h('div', { key: 'totals', style: { opacity: 0.6, marginTop: '4px' } },
+                    `${totals.dirs || 0} 个目录 · ${totals.sessions || 0} 个会话 · ${fmtBytes(totals.bytes || 0)}`),
+                  h('div', { key: 'hint', style: { opacity: 0.5, marginTop: '10px', fontSize: '12px' } },
+                    '先选目录、再选会话：只下载你打开的那一部分，不再整包加载全部历史。'),
+                  totals.sessions === 0 && h('div', { key: 'empty', style: { opacity: 0.6, marginTop: '8px' } },
+                    '还没有数据 —— 点击左侧「⟳ 更新数据」扫描本机会话。'),
+                ]))
 
-    return selected === null
-      ? h('div', { className: 'ctv-root' },
-          list,
-          h(Resizer, { onResize: setSidebarWidth }),
-          h('div', { className: 'ctv-main ctv-empty' },
-            h('div', null,
-              h('div', { style: { fontSize: '40px' } }, '🌀'),
-              h('div', { style: { fontSize: '16px', fontWeight: 600, marginTop: '8px' } }, 'Select an OpenCode session'),
-              h('div', { style: { opacity: 0.6, marginTop: '4px' } }, `${traces.length} sessions grouped by project folder`))))
-      : h('div', { className: 'ctv-root' },
-          list,
-          h(Resizer, { onResize: setSidebarWidth }),
-          h(TraceView, { trace: selected, onBack: () => setSelected(null) }))
+    return h('div', { className: 'ctv-root' },
+      sidebar,
+      h(Resizer, { onResize: setSidebarWidth }),
+      main,
+      loading === 'session' && h('div', { className: 'ctv-loading-pill' }, '加载会话…'))
   }
 
   const style = typeof document !== 'undefined' ? document.createElement('style') : { textContent: '', remove() {} }
-  if (style.dataset) style.dataset.plugin = 'dsh-client-codex-trace-viewer'
+  if (style.dataset) style.dataset.plugin = 'dsh-client-opencode-trace-viewer'
   style.textContent = `
     body { margin: 0; font-family: system-ui, sans-serif; background: #f6f8fa; color: #1f2328; }
     .ctv-root { display: flex; height: 100vh; font-size: 13px; }
@@ -690,6 +793,19 @@ window.__ModuleLoader__.load({ id: 'dsh-client-codex-trace-viewer', factory: (re
     .ctv-item:hover { background: rgba(9,105,218,0.08); }
     .ctv-item-name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .ctv-item-meta { font-size: 11px; opacity: 0.55; margin-top: 2px; }
+    .ctv-item-on { background: rgba(9,105,218,0.12); border-radius: 6px; }
+    .ctv-side-filter { width: 100%; box-sizing: border-box; margin: 0 0 6px; border: 1px solid #d0d7de; border-radius: 6px; padding: 5px 8px; font-size: 12px; outline: none; background: #fff; color: inherit; }
+    .ctv-side-filter:focus { border-color: #0969da; }
+    .ctv-crumb { display: flex; align-items: center; gap: 6px; padding: 2px 0 8px; margin-bottom: 4px; border-bottom: 1px solid rgba(127,127,127,0.2); }
+    .ctv-crumb-back { padding: 3px 8px; font-size: 11px; flex-shrink: 0; }
+    .ctv-crumb-name { flex: 1; min-width: 0; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .ctv-dir { padding: 8px 10px; border: 1px solid transparent; border-radius: 8px; cursor: pointer; margin-bottom: 2px; }
+    .ctv-dir:hover { background: rgba(9,105,218,0.08); border-color: rgba(9,105,218,0.25); }
+    .ctv-dir-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .ctv-dir-meta { font-size: 11px; opacity: 0.6; margin-top: 2px; }
+    .ctv-dir-path { font-size: 10px; opacity: 0.45; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .ctv-side-empty { padding: 12px 8px; font-size: 11px; opacity: 0.55; text-align: center; line-height: 1.5; }
+    .ctv-loading-pill { position: fixed; right: 16px; bottom: 16px; background: #0969da; color: #fff; font-size: 11px; padding: 5px 12px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.2); z-index: 20; }
     .ctv-main { flex: 1; overflow-y: auto; min-width: 0; display: flex; flex-direction: column; }
     .ctv-toolbar { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid #d0d7de; background: #fff; z-index: 2; }
     .ctv-back { border: 1px solid #d0d7de; background: #fff; border-radius: 6px; padding: 5px 10px; cursor: pointer; }

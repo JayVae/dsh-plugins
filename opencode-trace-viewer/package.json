@@ -1,6 +1,6 @@
 {
   "name": "dsh-client-opencode-trace-viewer",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Trajectory viewer for OpenCode sessions (SQLite) inside the DeepSeek Harness web UI.",
   "license": "MIT",
   "publishConfig": { "registry": "https://registry.npmjs.org/" },

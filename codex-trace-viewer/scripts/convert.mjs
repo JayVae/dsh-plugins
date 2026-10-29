@@ -2,7 +2,8 @@
 // Convert Codex session rollouts (~/.codex/sessions/**/*.jsonl) into the
 // trace JSON consumed by the Codex Trace Viewer plugin, then rebuild
 // lib/client.js from src/client-main.js with the data inlined.
-import { readdirSync, readFileSync, statSync, mkdirSync, writeFileSync } from 'node:fs'
+import { readdirSync, readFileSync, statSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { join, dirname, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
@@ -128,9 +129,124 @@ function convertFile(path) {
   return meta
 }
 
+// ---- sharded output --------------------------------------------------------
+// One file per session, one per directory, plus a small index:
+//
+//   <out>/index.json            every directory + counts      (a few KB)
+//   <out>/dirs/<dirKey>.json    the sessions of one directory (a few KB)
+//   <out>/sessions/<dirKey>/<sessionKey>.json   one session's events
+//
+// The viewer asks for a directory before it asks for sessions, so a history
+// that keeps growing never turns into one huge download — the old single
+// traces.json reached 12 MB and grew with every conversation.
+function keyOf(value) {
+  return createHash('sha1').update(String(value)).digest('hex').slice(0, 12)
+}
+
+function stamp() {
+  const d = new Date()
+  const pad = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
+/** Newest timestamp a session knows about — event times beat the start date. */
+function lastEventTime(trace) {
+  for (let i = trace.events.length - 1; i >= 0; i--) if (trace.events[i].time) return trace.events[i].time
+  return ''
+}
+
+function writeShards(outDir, traces) {
+  const dirsDir = join(outDir, 'dirs')
+  const sessionsDir = join(outDir, 'sessions')
+  // Start clean: shards from an earlier run must not survive a refresh.
+  rmSync(dirsDir, { recursive: true, force: true })
+  rmSync(sessionsDir, { recursive: true, force: true })
+  rmSync(join(outDir, 'traces.json'), { force: true })
+  mkdirSync(dirsDir, { recursive: true })
+  mkdirSync(sessionsDir, { recursive: true })
+
+  const groups = new Map()
+  for (const trace of traces) {
+    const path = trace.cwd || trace.directory || ''
+    const key = keyOf(path || '(no path)')
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        path,
+        folder: trace.folder || path.split(/[\\/]/).filter(Boolean).pop() || '(no path)',
+        sessions: [],
+      })
+    }
+    groups.get(key).sessions.push(trace)
+  }
+
+  const dirs = []
+  let totalEvents = 0
+  let totalBytes = 0
+  for (const group of groups.values()) {
+    const folderDir = join(sessionsDir, group.key)
+    mkdirSync(folderDir, { recursive: true })
+    const entries = []
+    let dirEvents = 0
+    let dirBytes = 0
+    // A resumed rollout can repeat a session id; two shards must not share a
+    // filename (one would silently overwrite the other), so ids are made unique.
+    const usedIds = new Set()
+    for (const trace of group.sessions) {
+      let id = trace.id
+      for (let n = 2; usedIds.has(id); n++) id = `${trace.id}-${n}`
+      usedIds.add(id)
+      trace.id = id
+      const file = keyOf(id) + '.json'
+      const body = JSON.stringify(trace)
+      writeFileSync(join(folderDir, file), body)
+      const bytes = Buffer.byteLength(body)
+      const events = trace.events.length
+      dirEvents += events
+      dirBytes += bytes
+      entries.push({
+        id: trace.id,
+        name: trace.name || trace.title || '',
+        date: trace.date || '',
+        updated: trace.updated || lastEventTime(trace),
+        model: trace.model || '',
+        events,
+        bytes,
+        file,
+      })
+    }
+    entries.sort((a, b) => String(b.updated || b.date).localeCompare(String(a.updated || a.date)))
+    writeFileSync(join(dirsDir, `${group.key}.json`),
+      JSON.stringify({ key: group.key, path: group.path, folder: group.folder, sessions: entries }))
+    dirs.push({
+      key: group.key,
+      path: group.path,
+      folder: group.folder,
+      sessions: entries.length,
+      events: dirEvents,
+      bytes: dirBytes,
+      latest: entries.length ? entries[0].updated || entries[0].date : '',
+      file: `${group.key}.json`,
+    })
+    totalEvents += dirEvents
+    totalBytes += dirBytes
+  }
+
+  dirs.sort((a, b) => String(b.latest).localeCompare(String(a.latest)) || a.folder.localeCompare(b.folder))
+  const index = {
+    version: 2,
+    generatedAt: stamp(),
+    totals: { dirs: dirs.length, sessions: traces.length, events: totalEvents, bytes: totalBytes },
+    dirs,
+  }
+  // Written last: a half-finished run must never be advertised as the index.
+  writeFileSync(join(outDir, 'index.json'), JSON.stringify(index))
+  return index
+}
+
 const rollouts = collectRollouts(sessionsRoot)
 rollouts.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)
 const traces = rollouts.slice(0, MAX_TRACES).map(convertFile).filter(t => t.events.length > 1)
 mkdirSync(outDir, { recursive: true })
-writeFileSync(join(outDir, 'traces.json'), JSON.stringify(traces))
-console.log(`converted ${traces.length} traces (${traces.reduce((n, t) => n + t.events.length, 0)} events) -> ${join(outDir, 'traces.json')}`)
+const index = writeShards(outDir, traces)
+console.log(`converted ${traces.length} traces (${index.totals.events} events) in ${index.totals.dirs} directories -> ${outDir}`)

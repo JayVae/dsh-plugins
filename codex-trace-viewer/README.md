@@ -2,7 +2,7 @@
 
 在 [DeepSeek Harness（dsh）](https://github.com/deepseek-ai/deepseek-harness) Web UI 中查看 [Codex CLI](https://developers.openai.com/codex/) 会话轨迹（trajectory view）的插件（客户端 + host 服务端各半）。
 
-侧边栏底部会出现 **🧭 Codex Traces** 按钮，打开独立的轨迹查看器：按项目目录分组的会话列表、轮次瀑布流时间轴、调用链阅读视图、minimap 平移缩放、类型过滤与会话内搜索。
+侧边栏底部会出现 **🧭 Codex Traces** 按钮，打开独立的轨迹查看器：先选目录、再选会话（按需加载）、轮次瀑布流时间轴、调用链阅读视图、minimap 平移缩放、类型过滤与会话内搜索。
 
 ## 支持版本
 
@@ -52,13 +52,17 @@ pnpm add dsh-client-codex-trace-viewer
 
 1. 打开 dsh Web UI，点击侧边栏底部 **🧭 Codex Traces**。
 
-2. 首次打开时列表为空，点查看器左上角的 **⟳ 更新数据**。host 侧（`lib/index.js`）会在这台机器上
-   运行一次 `scripts/convert.mjs`，把 `~/.codex/sessions/` 的会话转换到 `lib/assets/traces.json`，
-   然后自动重新加载列表——**不需要终端、不需要重建、不需要重启 dsh**。
+2. 首次打开时目录列表为空，点查看器左上角的 **⟳ 更新数据**。host 侧（`lib/index.js`）会在这台机器上
+   运行一次 `scripts/convert.mjs`，把 `~/.codex/sessions/` 的会话按项目目录分片写到 `lib/assets/`，
+   然后自动重新加载目录列表——**不需要终端、不需要重建、不需要重启 dsh**。
+
+3. **先选目录，再选会话**：左侧只显示目录清单（项目名 + 会话数 + 体积），点进去才加载该目录的会话列表，
+   点某个会话才加载它的事件。这样打开查看器的开销与会话历史长短无关，不会再出现整包下载十几 MB 的情况。
 
 > 之后想看最新会话，随时再点一次 **⟳ 更新数据** 即可（同一个按钮同时覆盖首次生成和后续更新）。
-> 轨迹数据不打包进 bundle：host 在 `/.dsh-codex-trace-viewer/traces` 路由上每次请求实时读盘返回。
-> 数据完全留在本机，插件不访问任何外部网络资源（fetch 仅指向本机 dsh 路由）。
+> 上次打开的目录会被记住，下次打开直接回到它（只重新拉那一个目录的列表）。
+> 轨迹数据不打包进 bundle：host 在 `/.dsh-codex-trace-viewer/index`、`/sessions`、`/session` 三条路由上
+> 每次请求实时读盘返回。数据完全留在本机，插件不访问任何外部网络资源（fetch 仅指向本机 dsh 路由）。
 
 ### 可选：命令行方式
 
@@ -70,7 +74,8 @@ pnpm add dsh-client-codex-trace-viewer
 ## 功能
 
 - 一键更新：侧边栏 **⟳ 更新数据** 按钮直接在本机重跑转换并刷新列表，无需命令行
-- 会话列表：按项目目录折叠分组，显示标题、日期、事件数
+- 目录优先 + 按需加载：目录清单（几 KB）→ 单目录会话列表 → 单会话事件，逐层加载，历史再长也不拖慢打开速度
+- 会话列表：显示标题、日期、事件数、体积；顶部输入框可过滤目录或会话
 - 轮次瀑布流时间轴：turns 主泳道 + reply / tool / think / other 子泳道，按事件序号定位（空闲间隔不占宽度）
 - minimap 滚动条：canvas 分桶绘制的全时段概览，拖动平移、点击居中、shift+滚轮缩放、双击重置
 - 轮次阅读视图：用户输入 → 折叠的"中间过程"区（分类计数：🔧 工具 / 🤔 思考 / 💬 输出）→ 最终结果，点击瘦行展开输入输出明细
@@ -81,17 +86,20 @@ pnpm add dsh-client-codex-trace-viewer
 
 ```sh
 pnpm install
-node scripts/convert.mjs   # ~/.codex/sessions → lib/assets/traces.json（默认写到包内）
+node scripts/convert.mjs   # ~/.codex/sessions → lib/assets/{index.json,dirs,sessions}（默认写到包内）
 node scripts/build.mjs     # src/client-main.js → lib/client.js（不含数据）
-node scripts/smoke.mjs     # 冒烟测试「⟳ 更新数据」按钮的请求链路（无需浏览器）
+node scripts/smoke.mjs     # 冒烟测试：index → 目录 → 会话 → 更新，验证按需加载与请求头（无需浏览器）
 ```
 
 - `src/client-main.js` 是唯一需要编辑的 UI 源码；`lib/client.js` 为构建产物，请勿直接修改
-- `lib/index.js` 是 host 侧，注册两条路由：
-  - `GET /.dsh-codex-trace-viewer/traces` — 每次请求实时读盘返回 `lib/assets/traces.json`
+- `lib/index.js` 是 host 侧，注册四条路由：
+  - `GET /.dsh-codex-trace-viewer/index` — 目录清单（`lib/assets/index.json`）
+  - `GET /.dsh-codex-trace-viewer/sessions?dir=<dirKey>` — 单目录的会话列表（`lib/assets/dirs/`）
+  - `GET /.dsh-codex-trace-viewer/session?dir=<dirKey>&file=<file>` — 单会话的事件（`lib/assets/sessions/`）
   - `POST /.dsh-codex-trace-viewer/refresh` — 在本机 spawn `scripts/convert.mjs --out lib/assets`，
     返回 `{ ok, stdout, stderr, data }`；要求 `x-dsh-trace-refresh: 1` 请求头（跨站请求无法携带
     自定义头而不触发 CORS 预检，以此挡住 CSRF），同一时刻只跑一个转换
+- 分片文件名是 sha1 摘要（`dirKey` / `file` 均校验为 12 位十六进制），路径穿越在路由层就被拒绝
 - 构建脚本会对 `//# sourceMappingURL=` / `//# sourceURL=` 序列做 `\u0023` 中和（见
   [docs/dsh-upstream-bundle-trailer-truncation.md](../docs/dsh-upstream-bundle-trailer-truncation.md)），
   防止 DSH 服务端剥离 trailer 的正则在单行 bundle 中误匹配数据文本并把文件截断
@@ -100,6 +108,7 @@ node scripts/smoke.mjs     # 冒烟测试「⟳ 更新数据」按钮的请求�
 ## 已知限制
 
 - 轨迹数据按转换时的快照服务（host 每请求实时读盘）；新会话需点一次 **⟳ 更新数据**，自动增量转换计划中
+- 首次进入某个目录、点开某个会话各有一次本地请求（通常 1–60 KB），换来的是打开查看器只花几 KB
 - 「更新数据」按钮依赖 dsh 的 `webServer` 服务；若该服务不可用，查看器会提示改用命令行
 - 单会话事件上限 4000 条、单条文本截断 4000 字符、最多 80 个会话
 

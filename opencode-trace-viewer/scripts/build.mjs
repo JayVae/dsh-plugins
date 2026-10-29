@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // Build the plugin bundle:
 //   lib/client.js  UI entry, loaded at page startup. It carries NO trace data —
-//                  traces are fetched at runtime from the host companion route
-//                  (/.dsh-opencode-trace-viewer/traces), which re-reads
-//                  lib/assets/traces.json on every request. Regenerate the data
-//                  with scripts/convert.mjs; a rebuild is only needed when
-//                  src/client-main.js changes.
+//                  data is fetched at runtime from the host companion routes
+//                  (/.dsh-opencode-trace-viewer/{index,sessions,session}), which
+//                  re-read lib/assets/{index.json,dirs/,sessions/} per request.
+//                  Regenerate the data with scripts/convert.mjs; a rebuild is
+//                  only needed when src/client-main.js changes.
 // NOTE: the id rewrite MUST be a function — String.replace would otherwise
 // interpret $&/$' sequences inside the payload.
 import { readFileSync, writeFileSync } from 'node:fs'

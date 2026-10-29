@@ -1,11 +1,16 @@
-/** Host companion: serves the converted traces JSON and refreshes it on demand.
+/** Host companion: serves the converted trace data and refreshes it on demand.
  *
  * Routes (all under {@link ROUTE_PREFIX}):
- *   GET  /traces   the converted JSON, re-read from disk on every request
- *   POST /refresh  re-runs scripts/convert.mjs, then reports what changed
+ *   GET  /index     directories + counts                       (a few KB)
+ *   GET  /sessions  ?dir=<dirKey>  sessions of one directory   (a few KB)
+ *   GET  /session   ?dir=<dirKey>&file=<file>  one session's events
+ *   POST /refresh   re-runs scripts/convert.mjs, then reports what changed
  *
- * Because the JSON is read per request, the viewer's "更新数据" button only has
- * to POST /refresh and re-fetch /traces — no rebuild, redeploy, or restart.
+ * Data is sharded on disk (index.json + dirs/ + sessions/) and read per
+ * request, so the viewer downloads a directory before a session and never the
+ * whole history: the old single traces.json reached 12 MB and grew with every
+ * conversation. Because every file is read per request, the "更新数据" button
+ * only has to POST /refresh and re-fetch /index — no rebuild or restart.
  */
 import { spawn } from 'node:child_process'
 import { existsSync, readFileSync, statSync } from 'node:fs'
@@ -14,15 +19,27 @@ import { fileURLToPath } from 'node:url'
 
 /** Route prefix registered on the DSH web server. */
 export const ROUTE_PREFIX = '/.dsh-opencode-trace-viewer'
-/** `GET` — the converted traces JSON (re-read from disk per request). */
-export const ROUTE_TRACES = `${ROUTE_PREFIX}/traces`
+/** `GET` — directory index (re-read from disk per request). */
+export const ROUTE_INDEX = `${ROUTE_PREFIX}/index`
+/** `GET` — sessions of one directory (`?dir=<dirKey>`). */
+export const ROUTE_SESSIONS = `${ROUTE_PREFIX}/sessions`
+/** `GET` — one session's events (`?dir=<dirKey>&file=<file>`). */
+export const ROUTE_SESSION = `${ROUTE_PREFIX}/session`
 /** `POST` — run the converter against this machine's sessions. */
 export const ROUTE_REFRESH = `${ROUTE_PREFIX}/refresh`
+/** Retired: the single monolithic JSON. Kept only to answer with an upgrade hint. */
+export const ROUTE_TRACES = `${ROUTE_PREFIX}/traces`
 
 const pkgDir = dirname(fileURLToPath(import.meta.url)).replace(/[\\/]lib$/, '')
 const dataDir = join(pkgDir, 'lib', 'assets')
-const dataFile = join(dataDir, 'traces.json')
+const indexFile = join(dataDir, 'index.json')
+const dirsDir = join(dataDir, 'dirs')
+const sessionsDir = join(dataDir, 'sessions')
 const convertScript = join(pkgDir, 'scripts', 'convert.mjs')
+
+/** Shard names are generated hex digests, so anything else is a bad request. */
+const KEY_RE = /^[0-9a-f]{12}$/
+const FILE_RE = /^[0-9a-f]{12}\.json$/
 
 /** A conversion longer than this is treated as hung and killed. */
 const REFRESH_TIMEOUT_MS = 180_000
@@ -30,6 +47,15 @@ const REFRESH_TIMEOUT_MS = 180_000
 function json(res, status, body) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
   res.end(JSON.stringify(body))
+}
+
+/** Send a file's bytes verbatim: the client parses, the host never re-encodes. */
+function sendFile(req, res, path) {
+  if (!existsSync(path)) return false
+  const body = readFileSync(path)
+  res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+  res.end(req.method === 'HEAD' ? undefined : body)
+  return true
 }
 
 /** One conversion at a time: a second click joins the run already in flight. */
@@ -78,13 +104,24 @@ function runConvert() {
   return inFlight
 }
 
-/** Summarize the data file so the client can show what a refresh produced. */
+/** Summarize the data set so the client can show what a refresh produced. */
 function describeData() {
-  if (!existsSync(dataFile)) return { traces: 0, bytes: 0, mtimeMs: 0 }
-  const stat = statSync(dataFile)
-  let traces = 0
-  try { traces = JSON.parse(readFileSync(dataFile, 'utf8')).length } catch { /* report 0 rather than fail the refresh */ }
-  return { traces, bytes: stat.size, mtimeMs: stat.mtimeMs }
+  if (!existsSync(indexFile)) return { dirs: 0, sessions: 0, events: 0, bytes: 0, mtimeMs: 0 }
+  const stat = statSync(indexFile)
+  try {
+    const index = JSON.parse(readFileSync(indexFile, 'utf8'))
+    const totals = index.totals || {}
+    return {
+      dirs: totals.dirs ?? (index.dirs || []).length,
+      sessions: totals.sessions ?? 0,
+      events: totals.events ?? 0,
+      bytes: totals.bytes ?? 0,
+      generatedAt: index.generatedAt || '',
+      mtimeMs: stat.mtimeMs,
+    }
+  } catch {
+    return { dirs: 0, sessions: 0, events: 0, bytes: 0, mtimeMs: stat.mtimeMs }
+  }
 }
 
 export function apply(ctx) {
@@ -101,16 +138,37 @@ export function apply(ctx) {
       path: ROUTE_PREFIX,
       handler: async (req, res) => {
         const url = new URL(req.url ?? '/', 'http://localhost')
+        const readOnly = req.method === 'GET' || req.method === 'HEAD'
+
+        if (url.pathname === ROUTE_INDEX) {
+          if (!readOnly) return json(res, 405, { error: 'method not allowed' })
+          if (sendFile(req, res, indexFile)) return
+          return json(res, 404, { error: 'no trace data converted yet — click 「⟳ 更新数据」 in the viewer, or run scripts/convert.mjs' })
+        }
+
+        if (url.pathname === ROUTE_SESSIONS) {
+          if (!readOnly) return json(res, 405, { error: 'method not allowed' })
+          const key = url.searchParams.get('dir') || ''
+          if (!KEY_RE.test(key)) return json(res, 400, { error: 'bad dir key' })
+          if (sendFile(req, res, join(dirsDir, `${key}.json`))) return
+          return json(res, 404, { error: `no directory ${key} in the converted data — refresh` })
+        }
+
+        if (url.pathname === ROUTE_SESSION) {
+          if (!readOnly) return json(res, 405, { error: 'method not allowed' })
+          const key = url.searchParams.get('dir') || ''
+          const file = url.searchParams.get('file') || ''
+          // Both names are validated against generated hex digests, so a
+          // crafted value can never walk out of lib/assets/sessions.
+          if (!KEY_RE.test(key) || !FILE_RE.test(file)) return json(res, 400, { error: 'bad dir/file' })
+          if (sendFile(req, res, join(sessionsDir, key, file))) return
+          return json(res, 404, { error: `no session file ${key}/${file} — refresh` })
+        }
 
         if (url.pathname === ROUTE_TRACES) {
-          if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error: 'method not allowed' })
-          if (!existsSync(dataFile)) {
-            return json(res, 404, { error: 'no traces converted yet — click 「⟳ 更新数据」 in the viewer, or run scripts/convert.mjs' })
-          }
-          const body = readFileSync(dataFile)
-          res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
-          res.end(req.method === 'HEAD' ? undefined : body)
-          return
+          return json(res, 410, {
+            error: 'this version serves /index, /sessions and /session — reload the viewer page to pick up the new client',
+          })
         }
 
         if (url.pathname === ROUTE_REFRESH) {

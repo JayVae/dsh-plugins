@@ -1,6 +1,7 @@
-// Build a publishable bundle: replaces the inlined personal session data
-// with an empty set. Run `pnpm run build:public` before `npm publish`.
-import { writeFileSync } from 'node:fs'
+// Public build: make sure no converted session data can reach the tarball.
+// npm never packs lib/assets (package.json "files" excludes it), so this is
+// belt-and-braces for anyone inspecting a local `npm pack`.
+import { rmSync } from 'node:fs'
 
-writeFileSync(new URL('../lib/assets/traces.json', import.meta.url), '[]')
-console.log('lib/assets/traces.json reset to [] (public build)')
+rmSync(new URL('../lib/assets', import.meta.url), { recursive: true, force: true })
+console.log('lib/assets removed (public build)')
