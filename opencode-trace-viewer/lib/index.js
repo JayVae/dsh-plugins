@@ -22,22 +22,29 @@ function json(res, status, body) {
 }
 
 export function apply(ctx) {
-  const webServer = ctx.get?.('webServer')
-  if (webServer === undefined) return
-  return ctx.effect(() => webServer.register({
-    kind: 'prefix',
-    path: ROUTE_PREFIX,
-    handler: async (req, res) => {
-      const url = new URL(req.url ?? '/', 'http://localhost')
-      if (url.pathname !== ROUTE_TRACES || (req.method !== 'GET' && req.method !== 'HEAD')) {
-        return json(res, 404, { error: 'not found' })
-      }
-      if (!existsSync(dataFile)) {
-        return json(res, 404, { error: `no traces converted yet — expected ${dataFile}; run scripts/convert.mjs (see README)` })
-      }
-      const body = readFileSync(dataFile)
-      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
-      res.end(req.method === 'HEAD' ? undefined : body)
-    },
-  }))
+  // The webServer service may start after this plugin applies; defer route
+  // registration until it is available (same pattern dsh-session-delete uses).
+  ctx.inject(['webServer'], (webCtx) => {
+    const webServer = webCtx.get('webServer')
+    if (webServer === undefined) {
+      console.error('dsh-client-opencode-trace-viewer: no webServer service; traces route unavailable')
+      return undefined
+    }
+    return webServer.register({
+      kind: 'prefix',
+      path: ROUTE_PREFIX,
+      handler: async (req, res) => {
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        if (url.pathname !== ROUTE_TRACES || (req.method !== 'GET' && req.method !== 'HEAD')) {
+          return json(res, 404, { error: 'not found' })
+        }
+        if (!existsSync(dataFile)) {
+          return json(res, 404, { error: `no traces converted yet — expected ${dataFile}; run scripts/convert.mjs (see README)` })
+        }
+        const body = readFileSync(dataFile)
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+        res.end(req.method === 'HEAD' ? undefined : body)
+      },
+    })
+  })
 }
