@@ -19,17 +19,24 @@ dsh plugin --profile web add dsh-client-codex-trace-viewer
 dsh plugin --profile web add dsh-client-opencode-trace-viewer
 ```
 
-详细的使用说明、版本要求与数据转换步骤见各插件目录下的 README。
+详细的使用说明、版本要求见各插件目录下的 README。
 
-> 注意：插件 bundle 不含任何会话数据。安装后需要在本机执行一次数据转换（各插件 README 的"使用"一节），把 `traces.json` 写到已安装副本的 `lib/assets/` 下；host 侧路由会在每次请求时实时读取该文件，之后更新数据只需重跑转换脚本 + 刷新浏览器，无需重建或重启。
+> 注意：插件 bundle 不含任何会话数据。安装后打开查看器，点左上角 **⟳ 更新数据** 即可生成；
+> host 侧会在这台机器上运行转换脚本，把结果写到已安装副本的 `lib/assets/traces.json`，
+> 之后每次点击都会重新扫描并刷新列表——无需终端、无需重建、无需重启 dsh。
 
 ## 数据流
 
 ```
+                          ┌── 查看器「⟳ 更新数据」按钮 (POST /refresh)
+                          ▼
 codex/opencode 会话数据 ──convert.mjs──▶ lib/assets/traces.json（已安装副本内）
                                               │
 浏览器查看器 ◀──运行时 fetch── host 侧路由（lib/index.js，每次请求实时读盘）
 ```
+
+一次点击的完整链路：按钮 → `POST /.dsh-<pkg>/refresh` → host 在本机 spawn `scripts/convert.mjs`
+→ 写 `lib/assets/traces.json` → 返回转换摘要 → 查看器重新 `GET /traces` 并渲染。
 
 ## 已知上游问题
 

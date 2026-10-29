@@ -2,6 +2,24 @@ window.__ModuleLoader__.load({ id: 'dsh-client-codex-trace-viewer', factory: (re
   const React = require('react')
   const ReactDOM = require('react-dom/client')
 
+  // The host companion (lib/index.js) serves this route. Deriving it from the
+  // package id keeps the sibling opencode build's id rewrite correct too:
+  // dsh-client-codex-trace-viewer -> /.dsh-codex-trace-viewer.
+  const PKG_ID = 'dsh-client-codex-trace-viewer'
+  const ROUTE_PREFIX = '/.dsh-' + PKG_ID.replace('dsh-client-', '')
+
+  // The viewer may run in a popup written via document.write (about:blank),
+  // where location.origin is "null" — resolve against the opener instead.
+  function apiBase() {
+    try { if (window.opener) return new URL('/', window.opener.location.href).origin } catch { /* cross-origin or closed opener */ }
+    return window.location.origin
+  }
+
+  function fetchJson(path, init) {
+    return fetch(apiBase() + path, init).then(r =>
+      r.json().then(body => r.ok ? body : Promise.reject(new Error((body && body.error) || `HTTP ${r.status}`))))
+  }
+
   function h(tag, props, ...children) {
     return React.createElement(tag, props, ...children.flat(Infinity).filter(c => c !== undefined && c !== null && c !== false))
   }
@@ -513,7 +531,25 @@ window.__ModuleLoader__.load({ id: 'dsh-client-codex-trace-viewer', factory: (re
     return h('div', { className: 'ctv-resizer', onPointerDown: startDrag })
   }
 
-  function TraceList({ traces, onOpen, width }) {
+  // "Refresh data" control: asks the host companion to re-run the converter,
+  // then reloads the JSON. Users never need a terminal.
+  function RefreshBar({ busy, message, onRefresh, compact }) {
+    return h('div', { className: 'ctv-refresh' },
+      h('button', {
+        className: 'ctv-refresh-btn' + (busy ? ' ctv-refresh-busy' : ''),
+        onClick: onRefresh,
+        disabled: busy,
+        type: 'button',
+        title: '重新扫描本机会话并更新轨迹数据',
+      }, busy ? '⟳ 更新中…' : '⟳ 更新数据'),
+      message && h('div', {
+        className: 'ctv-refresh-msg' + (compact ? ' ctv-refresh-msg-compact' : ''),
+        title: message,
+      }, message),
+    )
+  }
+
+  function TraceList({ traces, onOpen, width, busy, message, onRefresh }) {
     const folders = new Map()
     for (const t of traces) {
       const f = t.folder || '(no cwd)'
@@ -527,6 +563,7 @@ window.__ModuleLoader__.load({ id: 'dsh-client-codex-trace-viewer', factory: (re
       return next
     })
     return h('div', { className: 'ctv-sidebar', style: { width } },
+      h(RefreshBar, { busy, message, onRefresh }),
       [...folders.entries()].map(([folder, items]) => h('div', { key: folder, className: 'ctv-folder' },
         h('div', { className: 'ctv-folder-head', onClick: () => toggleFolder(folder) },
           h('span', { className: 'ctv-folder-arrow' }, collapsed.has(folder) ? '▸' : '▾'),
@@ -546,31 +583,63 @@ window.__ModuleLoader__.load({ id: 'dsh-client-codex-trace-viewer', factory: (re
     const [selected, setSelected] = React.useState(null)
     const [error, setError] = React.useState(null)
     const [sidebarWidth, setSidebarWidth] = React.useState(300)
+    const [busy, setBusy] = React.useState(false)
+    const [message, setMessage] = React.useState(null)
+
+    const loadTraces = React.useCallback(
+      () => fetchJson(ROUTE_PREFIX + '/traces').then(data => { setTraces(data); return data }),
+      [])
 
     React.useEffect(() => {
-      // Traces JSON is served by the host companion (lib/index.js) at a fixed
-      // route and re-read from disk per request — new sessions appear on
-      // refresh without a rebuild. The viewer may run in a popup written via
-      // document.write (about:blank), so resolve the route against the opener.
-      const base = (() => {
-        try { if (window.opener) return new URL('/', window.opener.location.href).origin } catch { /* cross-origin or closed opener */ }
-        return window.location.origin
-      })()
+      // Traces JSON is served by the host companion at a fixed route and
+      // re-read from disk per request, so new sessions appear on refresh.
       let cancelled = false
-      fetch(base + '/.dsh-codex-trace-viewer/traces')
-        .then(r => r.json().then(body => r.ok ? body : Promise.reject(new Error(body.error || `HTTP ${r.status}`))))
-        .then(data => { if (!cancelled) setTraces(data) })
-        .catch(e => { if (!cancelled) setError(String(e)) })
+      loadTraces().catch(e => { if (!cancelled) setError(String(e && e.message ? e.message : e)) })
       return () => { cancelled = true }
-    }, [])
+    }, [loadTraces])
 
-    if (error) return h('div', { className: 'ctv-root' }, 'Failed to load traces: ' + error)
-    if (!traces) return h('div', { className: 'ctv-root' }, 'Loading Codex traces…')
-    if (traces.length === 0) return h('div', { className: 'ctv-root' }, 'No Codex traces found. Run scripts/convert.mjs first.')
+    const refresh = React.useCallback(() => {
+      if (busy) return
+      setBusy(true)
+      setMessage(null)
+      // The custom header cannot be set by a cross-site form/fetch without a
+      // CORS preflight the host never grants, so it doubles as the CSRF guard.
+      fetchJson(ROUTE_PREFIX + '/refresh', { method: 'POST', headers: { 'x-dsh-trace-refresh': '1' } })
+        .then(res => loadTraces().then(data => ({ res, data })))
+        .then(({ data }) => {
+          setError(null)
+          setSelected(null)
+          setMessage(`已更新：${data.length} 个会话`)
+        })
+        .catch(e => setMessage('更新失败：' + String(e && e.message ? e.message : e)))
+        .then(() => setBusy(false))
+    }, [busy, loadTraces])
+
+    if (error) {
+      return h('div', { className: 'ctv-root ctv-error' },
+        h('div', null,
+          h('div', { style: { fontSize: '32px' } }, '⚠️'),
+          h('div', { style: { marginTop: '8px' } }, 'Failed to load traces: ' + error),
+          h('div', { style: { marginTop: '12px' } }, h(RefreshBar, { busy, message, onRefresh: refresh }))))
+    }
+    if (!traces) return h('div', { className: 'ctv-root ctv-loading' }, 'Loading Codex traces…')
+
+    const list = h(TraceList, { traces, onOpen: t => setSelected(t), width: sidebarWidth, busy, message, onRefresh: refresh })
+
+    if (traces.length === 0) {
+      return h('div', { className: 'ctv-root' },
+        list,
+        h(Resizer, { onResize: setSidebarWidth }),
+        h('div', { className: 'ctv-main ctv-empty' },
+          h('div', null,
+            h('div', { style: { fontSize: '40px' } }, '🧭'),
+            h('div', { style: { fontSize: '16px', fontWeight: 600, marginTop: '8px' } }, 'No Codex traces yet'),
+            h('div', { style: { opacity: 0.6, marginTop: '4px' } }, '点击左侧「⟳ 更新数据」扫描本机会话。'))))
+    }
 
     return selected === null
       ? h('div', { className: 'ctv-root' },
-          h(TraceList, { traces, onOpen: t => setSelected(t), width: sidebarWidth }),
+          list,
           h(Resizer, { onResize: setSidebarWidth }),
           h('div', { className: 'ctv-main ctv-empty' },
             h('div', null,
@@ -578,7 +647,7 @@ window.__ModuleLoader__.load({ id: 'dsh-client-codex-trace-viewer', factory: (re
               h('div', { style: { fontSize: '16px', fontWeight: 600, marginTop: '8px' } }, 'Select a Codex session'),
               h('div', { style: { opacity: 0.6, marginTop: '4px' } }, `${traces.length} sessions grouped by project folder`))))
       : h('div', { className: 'ctv-root' },
-          h(TraceList, { traces, onOpen: t => setSelected(t), width: sidebarWidth }),
+          list,
           h(Resizer, { onResize: setSidebarWidth }),
           h(TraceView, { trace: selected, onBack: () => setSelected(null) }))
   }
@@ -591,6 +660,16 @@ window.__ModuleLoader__.load({ id: 'dsh-client-codex-trace-viewer', factory: (re
     .ctv-resizer { width: 9px; margin: 0 -2px; cursor: col-resize; background: transparent; flex-shrink: 0; position: relative; z-index: 5; touch-action: none; }
     .ctv-resizer:hover, .ctv-resizer.ctv-resizing { background: rgba(9,105,218,0.35); }
     .ctv-sidebar { width: 300px; min-width: 220px; max-width: 60vw; overflow-y: auto; border-right: 1px solid #d0d7de; padding: 8px; flex: 0 0 auto; background: #fff; }
+    .ctv-refresh { display: flex; flex-direction: column; gap: 4px; padding: 2px 2px 8px; border-bottom: 1px solid rgba(127,127,127,0.2); margin-bottom: 6px; }
+    .ctv-refresh-btn { width: 100%; border: 1px solid #d0d7de; background: #fff; border-radius: 6px; padding: 6px 10px; font-size: 12px; cursor: pointer; color: #0969da; font-weight: 600; }
+    .ctv-refresh-btn:hover:not(:disabled) { background: rgba(9,105,218,0.08); border-color: #0969da; }
+    .ctv-refresh-btn:disabled { cursor: progress; opacity: 0.7; }
+    .ctv-refresh-busy { color: #57606a; }
+    .ctv-refresh-msg { font-size: 11px; line-height: 1.4; opacity: 0.75; word-break: break-word; max-height: 90px; overflow-y: auto; }
+    .ctv-refresh-msg-compact { max-height: 40px; }
+    .ctv-error { align-items: center; justify-content: center; display: flex; text-align: center; padding: 24px; flex-direction: column; }
+    .ctv-error .ctv-refresh { border-bottom: none; width: 320px; max-width: 80vw; }
+    .ctv-loading { align-items: center; justify-content: center; display: flex; opacity: 0.7; }
     .ctv-folder-head { display: flex; align-items: center; gap: 6px; padding: 6px 8px; font-weight: 700; cursor: pointer; border-radius: 6px; position: sticky; top: 0; background: #fff; z-index: 1; }
     .ctv-folder-head:hover { background: rgba(0,0,0,0.04); }
     .ctv-folder-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

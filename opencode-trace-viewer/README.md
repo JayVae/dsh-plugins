@@ -52,34 +52,29 @@ pnpm add dsh-client-opencode-trace-viewer
 
 ## 使用
 
-1. 生成轨迹数据。轨迹 **不打包进 bundle**：host 侧（`lib/index.js`）在
-   `/.dsh-opencode-trace-viewer/traces` 路由上每次请求实时读取 `lib/assets/traces.json`，
-   浏览器端打开查看器时运行时拉取。因此只需要把转换结果写到**已安装副本**的
-   `lib/assets` 下（`--out` 指向），无需重建 bundle、无需重启 dsh：
+1. 打开 dsh Web UI，点击侧边栏底部 **🌀 OpenCode Traces**。
 
-   ```sh
-   # 在克隆的本仓库 opencode-trace-viewer 目录内执行。
+2. 首次打开时列表为空，点查看器左上角的 **⟳ 更新数据**。host 侧（`lib/index.js`）会在这台机器上
+   以只读方式打开 `opencode.db` 并运行一次 `scripts/convert.mjs`，把会话转换到
+   `lib/assets/traces.json`，然后自动重新加载列表——**不需要终端、不需要重建、不需要重启 dsh**。
 
-   # Windows（PowerShell）
-   node scripts\convert.mjs `
-     --out "$env:USERPROFILE\.dsh\profiles\web\node_modules\dsh-client-opencode-trace-viewer\lib\assets"
+> 之后想看最新会话，随时再点一次 **⟳ 更新数据** 即可（同一个按钮同时覆盖首次生成和后续更新）。
+> 轨迹数据不打包进 bundle：host 在 `/.dsh-opencode-trace-viewer/traces` 路由上每次请求实时读盘返回。
+> 数据库以只读模式打开，数据完全留在本机；插件不访问任何外部网络资源（fetch 仅指向本机 dsh 路由）。
 
-   # macOS / Linux
-   node scripts/convert.mjs \
-     --out ~/.dsh/profiles/web/node_modules/dsh-client-opencode-trace-viewer/lib/assets
+### 可选：命令行方式
 
-   # 自定义数据库路径：OPENCODE_DB=/path/to/opencode.db 前缀即可
-   ```
+正常使用不需要命令行。只有这些情况会用到 `node scripts/convert.mjs [--out <dir>]`：
 
-2. 打开 dsh Web UI，点击侧边栏底部 **🌀 OpenCode Traces**。
-
-> 说明：数据库以只读模式打开，数据完全留在本机；插件运行时不读取任何外部网络资源（fetch 仅指向本机 dsh 路由）。
-> 每次想看最新会话，重跑第 1 步然后刷新页面即可（浏览器端 Ctrl+F5 绕过缓存更稳妥）。
+- 想在无浏览器的机器上预生成数据；
+- 数据库不在默认路径，需要 `OPENCODE_DB=/path/to/opencode.db node scripts/convert.mjs`；
+- 排查问题时想直接看转换输出。
 
 ## 功能
 
 与 `dsh-client-codex-trace-viewer` 一致：
 
+- 一键更新：侧边栏 **⟳ 更新数据** 按钮直接在本机重跑转换并刷新列表，无需命令行
 - 会话列表：按项目目录折叠分组，显示原生会话标题、日期、事件数
 - 轮次瀑布流时间轴：turns 主泳道 + reply / tool / think / other 子泳道，按事件序号定位（空闲间隔不占宽度）
 - minimap 滚动条：canvas 分桶绘制的全时段概览，拖动平移、点击居中、shift+滚轮缩放、双击重置
@@ -99,10 +94,15 @@ pnpm add dsh-client-opencode-trace-viewer
 pnpm install
 node scripts/convert.mjs   # opencode.db → lib/assets/traces.json（默认写到包内）
 node scripts/build.mjs     # src/client-main.js → lib/client.js（不含数据）
+node scripts/smoke.mjs     # 冒烟测试「⟳ 更新数据」按钮的请求链路（无需浏览器）
 ```
 
 - `src/client-main.js` 是唯一需要编辑的 UI 源码；`lib/client.js` 为构建产物，请勿直接修改
-- `lib/index.js` 是 host 侧：注册 `/.dsh-opencode-trace-viewer/traces` 路由，每次请求实时读盘返回 `lib/assets/traces.json`
+- `lib/index.js` 是 host 侧，注册两条路由：
+  - `GET /.dsh-opencode-trace-viewer/traces` — 每次请求实时读盘返回 `lib/assets/traces.json`
+  - `POST /.dsh-opencode-trace-viewer/refresh` — 在本机 spawn `scripts/convert.mjs --out lib/assets`，
+    返回 `{ ok, stdout, stderr, data }`；要求 `x-dsh-trace-refresh: 1` 请求头（跨站请求无法携带
+    自定义头而不触发 CORS 预检，以此挡住 CSRF），同一时刻只跑一个转换
 - 构建脚本会对 `//# sourceMappingURL=` / `//# sourceURL=` 序列做 `\u0023` 中和（见
   [docs/dsh-upstream-bundle-trailer-truncation.md](../docs/dsh-upstream-bundle-trailer-truncation.md)），
   防止 DSH 服务端剥离 trailer 的正则在单行 bundle 中误匹配数据文本并把文件截断
@@ -110,7 +110,9 @@ node scripts/build.mjs     # src/client-main.js → lib/client.js（不含数据
 
 ## 已知限制
 
-- 轨迹数据按 convert 时的快照服务（host 每请求实时读盘），新会话需重跑 convert；自动增量转换计划中
+- 轨迹数据按转换时的快照服务（host 每请求实时读盘）；新会话需点一次 **⟳ 更新数据**，自动增量转换计划中
+- 「更新数据」按钮依赖 dsh 的 `webServer` 服务；若该服务不可用，查看器会提示改用命令行
+- 转换由 host 进程 spawn 子进程执行，需要 `node:sqlite`（Node 22+）
 - 单会话事件上限 4000 条、单条文本截断 4000 字符、最多 80 个会话
 
 ## License
