@@ -1,5 +1,4 @@
 window.__ModuleLoader__.load({ id: 'dsh-client-codex-trace-viewer', factory: (require) => {
-  const TRACES_DATA = /*__TRACES_DATA__*/[]
   const React = require('react')
   const ReactDOM = require('react-dom/client')
 
@@ -549,9 +548,20 @@ window.__ModuleLoader__.load({ id: 'dsh-client-codex-trace-viewer', factory: (re
     const [sidebarWidth, setSidebarWidth] = React.useState(300)
 
     React.useEffect(() => {
-      Promise.resolve(TRACES_DATA)
-        .then(data => { setTraces(data) })
-        .catch(e => setError(String(e)))
+      // Traces JSON is served by the host companion (lib/index.js) at a fixed
+      // route and re-read from disk per request — new sessions appear on
+      // refresh without a rebuild. The viewer may run in a popup written via
+      // document.write (about:blank), so resolve the route against the opener.
+      const base = (() => {
+        try { if (window.opener) return new URL('/', window.opener.location.href).origin } catch { /* cross-origin or closed opener */ }
+        return window.location.origin
+      })()
+      let cancelled = false
+      fetch(base + '/.dsh-opencode-trace-viewer/traces')
+        .then(r => r.json().then(body => r.ok ? body : Promise.reject(new Error(body.error || `HTTP ${r.status}`))))
+        .then(data => { if (!cancelled) setTraces(data) })
+        .catch(e => { if (!cancelled) setError(String(e)) })
+      return () => { cancelled = true }
     }, [])
 
     if (error) return h('div', { className: 'ctv-root' }, 'Failed to load traces: ' + error)
@@ -689,8 +699,6 @@ window.__ModuleLoader__.load({ id: 'dsh-client-codex-trace-viewer', factory: (re
     ctx.effect(() => () => style.remove(), 'opencode-trace-viewer: style lifetime')
     ctx.slots.inject('sidebar.footer.action', () =>
       ctx.slots.register({ name: 'sidebar.footer.action', id: 'opencode-trace-viewer', order: 151 }, ({ wide }) => viewerButton({ compact: !wide })))
-    ctx.slots.inject('conversation.session.header.actions', () =>
-      ctx.slots.register({ name: 'conversation.session.header.actions', id: 'opencode-trace-viewer', order: 151 }, viewerButton))
   }
 
   return { name: 'opencode-trace-viewer', inject: ['slots'], apply }

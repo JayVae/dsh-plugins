@@ -12,7 +12,12 @@ import { fileURLToPath } from 'node:url'
 
 const pkgDir = join(dirname(fileURLToPath(import.meta.url)), '..')
 const dbPath = process.env.OPENCODE_DB || join(homedir(), '.local', 'share', 'opencode', 'opencode.db')
-const outDir = join(pkgDir, 'lib', 'assets')
+const assetsDir = join(pkgDir, 'lib', 'assets')
+// `--out <dir>` writes traces.json elsewhere — typically the installed copy's
+// lib/assets under the DSH profile, so the running host companion serves the
+// fresh data and a browser refresh shows new sessions without a rebuild.
+const outArg = process.argv.indexOf('--out')
+const outDir = outArg !== -1 && process.argv[outArg + 1] ? process.argv[outArg + 1] : assetsDir
 const LIMIT_EVENTS = 4000
 const LIMIT_TEXT = 4000
 const MAX_TRACES = 80
@@ -127,4 +132,4 @@ for (const s of sessions) {
 
 mkdirSync(outDir, { recursive: true })
 writeFileSync(join(outDir, 'traces.json'), JSON.stringify(traces))
-console.log(`converted ${traces.length} opencode sessions (${traces.reduce((n, t) => n + t.events.length, 0)} events)`)
+console.log(`converted ${traces.length} opencode sessions (${traces.reduce((n, t) => n + t.events.length, 0)} events) -> ${join(outDir, 'traces.json')}`)

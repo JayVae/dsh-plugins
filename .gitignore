@@ -1,4 +1,5 @@
 node_modules/
 **/lib/client.js
+**/lib/client.traces.js
 **/lib/assets/
 **/lib/*.bak.js

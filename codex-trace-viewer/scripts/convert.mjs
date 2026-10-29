@@ -10,6 +10,11 @@ import { homedir } from 'node:os'
 const pkgDir = join(dirname(fileURLToPath(import.meta.url)), '..')
 const sessionsRoot = join(homedir(), '.codex', 'sessions')
 const assetsDir = join(pkgDir, 'lib', 'assets')
+// `--out <dir>` writes traces.json elsewhere — typically the installed copy's
+// lib/assets under the DSH profile, so the running host companion serves the
+// fresh data and a browser refresh shows new sessions without a rebuild.
+const outArg = process.argv.indexOf('--out')
+const outDir = outArg !== -1 && process.argv[outArg + 1] ? process.argv[outArg + 1] : assetsDir
 const LIMIT_EVENTS = 4000
 const LIMIT_TEXT = 4000
 const MAX_TRACES = 80
@@ -126,6 +131,6 @@ function convertFile(path) {
 const rollouts = collectRollouts(sessionsRoot)
 rollouts.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)
 const traces = rollouts.slice(0, MAX_TRACES).map(convertFile).filter(t => t.events.length > 1)
-mkdirSync(assetsDir, { recursive: true })
-writeFileSync(join(assetsDir, 'traces.json'), JSON.stringify(traces))
-console.log(`converted ${traces.length} traces (${traces.reduce((n, t) => n + t.events.length, 0)} events)`)
+mkdirSync(outDir, { recursive: true })
+writeFileSync(join(outDir, 'traces.json'), JSON.stringify(traces))
+console.log(`converted ${traces.length} traces (${traces.reduce((n, t) => n + t.events.length, 0)} events) -> ${join(outDir, 'traces.json')}`)
